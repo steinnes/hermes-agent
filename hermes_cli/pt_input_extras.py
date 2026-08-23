@@ -495,6 +495,23 @@ def install_modify_other_keys_aliases() -> int:
     return changed
 
 
+def install_normalized_space_binding(key_bindings):
+    """Bind Space to insertion of exactly one ordinary ASCII space.
+
+    prompt_toolkit keeps the complete source escape sequence in
+    ``KeyPress.data`` even when ``ANSI_SEQUENCES`` maps it to the string key
+    ``" "``. Its generic self-insert binding inserts ``event.data``, so
+    Shift+Space under xterm ``modifyOtherKeys`` otherwise inserts the literal
+    ``ESC[27;2;32~`` bytes despite the parser mapping being correct.
+    """
+
+    @key_bindings.add(" ", eager=True)
+    def _insert_ascii_space(event):
+        event.current_buffer.insert_text(" " * event.arg)
+
+    return _insert_ascii_space
+
+
 def install_ignored_terminal_sequences() -> int:
     """Map terminal-emitted noise sequences to ``Keys.Ignore`` so they
     are consumed by the VT100 parser before they reach key bindings or

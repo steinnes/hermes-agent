@@ -21,7 +21,10 @@ from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
 from prompt_toolkit.input.vt100_parser import Vt100Parser
 from prompt_toolkit.keys import Keys
 
-from hermes_cli.pt_input_extras import install_modify_other_keys_aliases
+from hermes_cli.pt_input_extras import (
+    install_modify_other_keys_aliases,
+    install_normalized_space_binding,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -361,9 +364,33 @@ def test_shift_backspace_is_plain_backspace():
 
 
 def test_shift_space_inserts_space():
-    """Shift+Space must insert a space, not leak escape text (#86866)."""
+    """The parser identifies Shift+Space as the space key."""
     assert _parse("\x1b[32;2u") == [" "]
     assert _parse("\x1b[27;2;32~") == [" "]
+
+
+@pytest.mark.parametrize("sequence", [" ", "\x1b[32;2u", "\x1b[27;2;32~"])
+def test_space_binding_inserts_ascii_space_instead_of_raw_sequence(sequence):
+    """The binding must not self-insert KeyPress.data for modified Space."""
+    from types import SimpleNamespace
+
+    from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.key_binding import KeyBindings
+
+    presses = []
+    parser = Vt100Parser(presses.append)
+    parser.feed_and_flush(sequence)
+    assert len(presses) == 1
+
+    bindings = KeyBindings()
+    install_normalized_space_binding(bindings)
+    matches = bindings.get_bindings_for_keys((presses[0].key,))
+    assert len(matches) == 1
+
+    buffer = Buffer()
+    event = SimpleNamespace(current_buffer=buffer, data=presses[0].data, arg=1)
+    matches[0].handler(event)  # type: ignore[arg-type]
+    assert buffer.text == " "
 
 
 # ---------------------------------------------------------------------------

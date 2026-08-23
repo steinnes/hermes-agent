@@ -17658,6 +17658,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Key bindings for the input area
         kb = KeyBindings()
 
+        # A parser alias alone is insufficient for modified Space:
+        # prompt_toolkit recognizes the key as " " but leaves the original
+        # CSI sequence in KeyPress.data, which generic self-insert uses.
+        from hermes_cli.pt_input_extras import install_normalized_space_binding
+        install_normalized_space_binding(kb)
+
         _multiline_shortcuts_enabled = _cli_multiline_shortcuts_enabled(self.config or CLI_CONFIG)
 
         from prompt_toolkit.keys import Keys as _IgnoreKeys
