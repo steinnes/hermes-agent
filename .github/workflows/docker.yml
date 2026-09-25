@@ -82,12 +82,11 @@ jobs:
         variant: [slim, desktop]
         include:
           - arch: amd64
-            runner: ubuntu-latest-32-core
+            runner: ubuntu-latest
             platform: linux/amd64
-          # arm64 builds on the native arm64 larger runner. A build of
-          # linux/arm64 on an x64 host uses emulation.
+          # Build arm64 on a native hosted runner instead of using x64 emulation.
           - arch: arm64
-            runner: ubuntu-latest-32-arm-core
+            runner: ubuntu-24.04-arm
             platform: linux/arm64
 
     runs-on: ${{ matrix.runner }}
@@ -200,11 +199,11 @@ jobs:
         variant: [slim, desktop]
         include:
           - arch: amd64
-            runner: ubuntu-latest-32-core
+            runner: ubuntu-latest
             platform: linux/amd64
-          # Native arm64 for the same reason as the build matrix above.
+          # Build arm64 on a native hosted runner instead of using x64 emulation.
           - arch: arm64
-            runner: ubuntu-latest-32-arm-core
+            runner: ubuntu-24.04-arm
             platform: linux/arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
