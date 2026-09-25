@@ -159,7 +159,7 @@ jobs:
   contributor-check:
     name: Check contributors
     needs: detect
-    if: needs.detect.outputs.python == 'true'
+    if: needs.detect.outputs.python == 'true' && github.repository == 'NousResearch/hermes-agent'
     uses: ./.github/workflows/contributor-check.yml
 
   uv-lockfile:
