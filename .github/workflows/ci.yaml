@@ -65,6 +65,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       python: ${{ steps.gate-lanes.outputs.python }}
+      python_full: ${{ steps.gate-lanes.outputs.python_full }}
+      python_acp: ${{ steps.gate-lanes.outputs.python_acp }}
       python_prod: ${{ steps.gate-lanes.outputs.python_prod }}
       frontend: ${{ steps.gate-lanes.outputs.frontend }}
       site: ${{ steps.gate-lanes.outputs.site }}
@@ -114,17 +116,29 @@ jobs:
   tests:
     name: Python tests
     needs: detect
-    if: needs.detect.outputs.python == 'true'
+    if: needs.detect.outputs.python_full == 'true'
     uses: ./.github/workflows/tests.yml
+
+  # Replaces `tests` and `tests-os` when every Python-relevant file of a PR
+  # sits in the ACP adapter or its tests (_PY_SCOPES in
+  # scripts/ci/classify_changes.py). Any other Python file selects the full
+  # suite instead.
+  tests-acp:
+    name: ACP tests
+    needs: detect
+    if: needs.detect.outputs.python_acp == 'true'
+    uses: ./.github/workflows/tests-scoped.yml
+    with:
+      scope: acp
 
   # macOS + Windows lanes. The main `tests` lane above is Linux-only, and
   # the OS-marked tests it collects are skipped there by design (see the
   # `_OS_MARKS` comment in tests/conftest.py) — this is where they run.
-  # Same `python` lane gate: if no Python changed, neither runs.
+  # Same `python_full` lane gate as `tests`.
   tests-os:
     name: OS-specific tests
     needs: detect
-    if: needs.detect.outputs.python == 'true'
+    if: needs.detect.outputs.python_full == 'true'
     uses: ./.github/workflows/tests-os.yml
     with:
       # The Windows lane spawns the real desktop-update hand-off script
@@ -298,6 +312,7 @@ jobs:
     needs:
       - detect
       - tests
+      - tests-acp
       - tests-os
       - lint
       - js-tests

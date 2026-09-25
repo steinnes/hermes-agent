@@ -13,10 +13,16 @@ inputs:
 
 outputs:
   python:
-    description: Run Python tests / ruff / ty / windows-footguns.
+    description: Run Python ruff / ty / windows-footguns.
     value: ${{ steps.classify.outputs.python }}
+  python_full:
+    description: Run the full Python suite (Linux slices, e2e, e2e-upgrade, OS lanes).
+    value: ${{ steps.classify.outputs.python_full }}
+  python_acp:
+    description: Run the focused ACP tests instead of the full suite (ACP-only Python diff).
+    value: ${{ steps.classify.outputs.python_acp }}
   python_prod:
-    description: Python changes outside tests/ — gates product jobs (Desktop E2E, Docker).
+    description: Python changes outside tests/ and outside a scoped surface — gates whole-product jobs (Desktop E2E, Docker, Nix).
     value: ${{ steps.classify.outputs.python_prod }}
   frontend:
     description: Run the TypeScript testing matrix + desktop build.

@@ -73,3 +73,30 @@ def test_cli_stdin_exit_codes_and_output(tmp_path, release, results, code, repor
     assert f"{key}={value}" in child.stdout
     for name, result in results.items():
         assert f"{name}: {result}" in child.stdout
+
+
+_ACP_PR = {"detect": "success", "tests": "skipped", "tests-os": "skipped",
+           "tests-acp": "success", "lint": "success", "e2e-desktop-core": "skipped"}
+
+
+@pytest.mark.parametrize("release,results,ok,failed", [
+    # A scoped PR skips the full Python jobs and passes on the focused lane.
+    (False, _ACP_PR, True, []),
+    (False, {**_ACP_PR, "tests-acp": "failure"}, False, ["tests-acp"]),
+    (False, {**_ACP_PR, "tests-acp": "cancelled"}, False, ["tests-acp"]),
+    # A full PR skips the focused lane.
+    (False, {"tests": "success", "tests-os": "success", "tests-acp": "skipped"}, True, []),
+    # Release forces every lane, so any skipped Python lane is a failure.
+    (True, {"tests": "success", "tests-os": "success", "tests-acp": "skipped"}, False, ["tests-acp"]),
+    (True, {**_ACP_PR}, False, ["e2e-desktop-core", "tests", "tests-os"]),
+])
+def test_scoped_python_lane_aggregation(release, results, ok, failed):
+    # Arrange
+    needs = {name: {"result": result} for name, result in results.items()}
+
+    # Act
+    verdict = evaluate_gate(needs, release=release)
+
+    # Assert
+    assert verdict["ok"] is ok
+    assert verdict["failed"] == failed

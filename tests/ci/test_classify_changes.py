@@ -30,6 +30,8 @@ main = _mod.main
 
 DEFAULT = {
     "python": True,
+    "python_full": True,
+    "python_acp": True,
     "python_prod": True,
     "frontend": True,
     "docker": True,
@@ -48,17 +50,20 @@ DEFAULT = {
 }
 
 
-def _lanes(python=False, frontend=False, site=False, scan=False, deps=False, uv_lock=False, npm_lock=False, bootstrap=False, desktop_updater=False, rust=False, mcp_catalog=False, docker_meta=False, ci_review=False, python_prod=None, nix=None, docker=None) -> dict[str, bool]:
-    # python_prod tracks python except for tests-only diffs; default it to
-    # python so the majority of cases don't need to spell it out.
+def _lanes(python=False, frontend=False, site=False, scan=False, deps=False, uv_lock=False, npm_lock=False, bootstrap=False, desktop_updater=False, rust=False, mcp_catalog=False, docker_meta=False, ci_review=False, python_prod=None, nix=None, docker=None, python_acp=False) -> dict[str, bool]:
+    # python_prod tracks python except for tests-only and scoped diffs; default
+    # it to python so the majority of cases don't need to spell it out.
+    # python_full is python unless a scoped lane (python_acp) replaces it.
     #
     # docker and nix are derived: both build the product, so both ride on
     # python_prod and frontend. The image ships the built web assets, and the
     # flake bundles the compiled ui-tui. Pass either explicitly to override.
-    _python_prod = python if python_prod is None else python_prod
+    _python_prod = (python and not python_acp) if python_prod is None else python_prod
     _product = _python_prod or frontend
     return {
         "python": python,
+        "python_full": python and not python_acp,
+        "python_acp": python_acp,
         "python_prod": _python_prod,
         "docker": (docker_meta or _product) if docker is None else docker,
         "nix": _product if nix is None else nix,
@@ -299,6 +304,70 @@ CASES = {
         ["apps/desktop/src/app.tsx"],
         _lanes(frontend=True),
     ),
+    # ACP-scoped lane: a diff whose Python-relevant files all sit in the ACP
+    # adapter or its mirrored tests runs the focused ACP tests instead of the
+    # full suite, and skips the whole-product jobs (Desktop E2E, Docker, Nix).
+    "acp source → focused acp lane": (
+        ["acp_adapter/server.py"],
+        _lanes(python=True, python_acp=True, scan=True),
+    ),
+    "acp source + owned tests → focused acp lane": (
+        ["acp_adapter/commands.py", "tests/acp_adapter/test_acp_commands.py", "tests/acp_adapter/conftest.py"],
+        _lanes(python=True, python_acp=True, scan=True),
+    ),
+    "acp tests only → focused acp lane": (
+        ["tests/acp_adapter/test_server.py"],
+        _lanes(python=True, python_acp=True, scan=True),
+    ),
+    "acp + prose → focused acp lane": (
+        ["acp_adapter/server.py", "README.md", "docs/acp.md"],
+        _lanes(python=True, python_acp=True, scan=True),
+    ),
+    "acp + frontend → focused acp lane + frontend": (
+        ["acp_adapter/server.py", "apps/desktop/src/app.tsx"],
+        _lanes(python=True, python_acp=True, scan=True, frontend=True),
+    ),
+    # Any Python-relevant file outside the scope fails open to the full lanes.
+    "acp + product python → full": (
+        ["acp_adapter/server.py", "agent/x.py"],
+        _lanes(python=True, scan=True),
+    ),
+    "acp + unrelated test → full": (
+        ["acp_adapter/server.py", "tests/agent/test_foo.py"],
+        _lanes(python=True, scan=True),
+    ),
+    "acp + shared conftest → full": (
+        ["tests/acp_adapter/test_server.py", "tests/conftest.py"],
+        _lanes(python=True, python_prod=False, scan=True, desktop_updater=True),
+    ),
+    "acp + unknown path → full": (
+        ["acp_adapter/server.py", "Makefile"],
+        _lanes(python=True, scan=True),
+    ),
+    "acp + test runner → full": (
+        ["acp_adapter/server.py", "scripts/run_tests_parallel.py"],
+        _lanes(python=True, scan=True),
+    ),
+    "acp + classifier → full": (
+        ["acp_adapter/server.py", "scripts/ci/classify_changes.py"],
+        _lanes(python=True, scan=True),
+    ),
+    "acp + dependency manifest → full": (
+        ["acp_adapter/server.py", "pyproject.toml"],
+        _lanes(python=True, scan=True, deps=True, uv_lock=True, desktop_updater=True),
+    ),
+    "acp + workflow → all": (
+        ["acp_adapter/server.py", ".github/workflows/ci.yaml"],
+        DEFAULT,
+    ),
+    "acp CLI subcommand is not the adapter → full": (
+        ["hermes_cli/subcommands/acp.py"],
+        _lanes(python=True, scan=True),
+    ),
+    "acp-prefixed sibling package → full": (
+        ["acp_adapter_extra/x.py"],
+        _lanes(python=True, scan=True),
+    ),
     # Fail open: CI-config / empty / blank diffs run everything.
     ".github change → all": ([".github/workflows/tests.yml"], DEFAULT),
     "action change → all": ([".github/actions/detect-changes/action.yml"], DEFAULT),
@@ -455,3 +524,198 @@ def test_main_still_fail_opens_when_recovery_is_empty(monkeypatch, capsys):
     assert main() == 0
     out = capsys.readouterr().out
     assert "ci_review=true" in out
+
+
+def test_scoped_lane_needs_a_complete_file_list():
+    """The compare API stops at 300 files, so a list that long may hide a file
+    outside the scope; only the full lanes are safe then."""
+    # Arrange
+    files = [f"acp_adapter/generated_{i}.py" for i in range(_mod._COMPARE_FILE_CAP)]
+
+    # Act
+    lanes = classify(files)
+
+    # Assert
+    assert lanes["python_full"] and lanes["python_prod"] and not lanes["python_acp"]
+
+
+def _tree(root: Path, files: dict[str, str]) -> Path:
+    for rel, text in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return root
+
+
+def test_scoped_tests_select_owned_tests_and_unit_tests_that_name_the_package(tmp_path):
+    # Arrange
+    root = _tree(tmp_path, {
+        "tests/acp_adapter/test_server.py": "def test_x(): pass\n",
+        "tests/acp_adapter/nested/test_nested.py": "def test_x(): pass\n",
+        "tests/acp_adapter/conftest.py": "import acp_adapter\n",
+        "tests/tools/test_model_tools.py": "PATCH = 'acp_adapter.edit_approval.x'\n",
+        "tests/tools/test_unrelated.py": "def test_x(): pass\n",
+        "tests/tools/test_lookalike.py": "import acp_adapter_extra\n",
+        "tests/e2e/core/test_entry.py": "import acp_adapter.entry\n",
+        "tests/integration/test_acp.py": "import acp_adapter\n",
+        "tests/docker/test_acp.py": "import acp_adapter\n",
+    })
+    expected = [
+        "tests/acp_adapter/nested/test_nested.py",
+        "tests/acp_adapter/test_server.py",
+        "tests/tools/test_model_tools.py",
+    ]
+
+    # Act
+    selected = _mod.scoped_test_files("acp", root)
+
+    # Assert
+    assert selected == expected
+
+
+def test_scoped_tests_skip_the_directories_the_runner_skips():
+    # Arrange
+    runner_path = _REPO / "scripts" / "run_tests_parallel.py"
+    spec = importlib.util.spec_from_file_location("run_tests_parallel", runner_path)
+    assert spec is not None and spec.loader is not None
+    runner = importlib.util.module_from_spec(spec)
+
+    # Act
+    spec.loader.exec_module(runner)
+
+    # Assert
+    assert _mod._RUNNER_SKIP_DIRS == runner._SKIP_PARTS
+
+
+def test_scope_tests_cli_lists_existing_acp_tests():
+    # Arrange
+    owned = {p.relative_to(_REPO).as_posix() for p in (_REPO / "tests" / "acp_adapter").rglob("test_*.py")}
+
+    # Act
+    child = subprocess.run(
+        [sys.executable, str(_PATH), "--scope-tests", "acp"],
+        capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=_REPO,
+    )
+
+    # Assert
+    assert child.returncode == 0, child.stderr
+    listed = child.stdout.split()
+    assert owned and owned <= set(listed)
+    assert all((_REPO / f).is_file() for f in listed)
+
+
+@pytest.mark.parametrize("scope", ["unknown", ""])
+def test_scope_tests_cli_rejects_unknown_scope(scope):
+    # Arrange
+    argv = [sys.executable, str(_PATH), "--scope-tests", scope]
+
+    # Act
+    child = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=_REPO)
+
+    # Assert
+    assert child.returncode != 0
+    assert child.stdout == ""
+
+
+def test_scope_tests_cli_fails_when_the_scope_selects_nothing(tmp_path):
+    # Arrange
+    root = _tree(tmp_path, {"tests/tools/test_unrelated.py": "def test_x(): pass\n"})
+
+    # Act
+    code = main(["--scope-tests", "acp", "--root", str(root)])
+
+    # Assert
+    assert code != 0
+
+
+def _job_runs(condition: object, outputs: dict[str, str], repository: str) -> bool:
+    """Evaluate the small `if:` dialect ci.yaml uses against detect outputs."""
+    if condition is None:
+        return True
+    expr = str(condition).strip()
+    if expr.startswith("${{") and expr.endswith("}}"):
+        expr = expr[3:-2]
+    expr = re.sub(r"needs\.detect\.outputs\.(\w+)", lambda m: repr(outputs.get(m.group(1), "")), expr)
+    expr = re.sub(r"needs\.[\w-]+\.outputs\.\w+", "''", expr)
+    expr = expr.replace("github.repository", repr(repository)).replace("always()", "True")
+    expr = expr.replace("&&", " and ").replace("||", " or ")
+    expr = re.sub(r"\btrue\b", "True", re.sub(r"\bfalse\b", "False", expr))
+    return bool(eval(expr, {"__builtins__": {}}, {}))
+
+
+def _selected_ci_jobs(files: list[str], event_name: str = "pull_request") -> set[str]:
+    lanes = classify(files if event_name == "pull_request" else [])
+    outputs = {lane: str(value).lower() for lane, value in lanes.items()}
+    outputs["event_name"] = event_name
+    ci = _yaml(".github/workflows/ci.yaml")
+    return {
+        name for name, job in ci["jobs"].items()
+        if _job_runs(job.get("if"), outputs, "steinnes/hermes-agent")
+    }
+
+
+_FULL_PYTHON_JOBS = {"tests", "tests-os", "e2e-desktop-core"}
+
+
+def test_acp_only_pr_runs_focused_tests_and_lint_but_no_full_python_jobs():
+    # Arrange
+    files = ["acp_adapter/commands.py", "tests/acp_adapter/test_acp_commands.py"]
+
+    # Act
+    jobs = _selected_ci_jobs(files)
+
+    # Assert
+    assert {"tests-acp", "lint", "all-checks-pass"} <= jobs
+    assert not jobs & _FULL_PYTHON_JOBS
+    assert not classify(files)["nix"] and not classify(files)["docker"]
+
+
+def test_acp_plus_unrelated_python_runs_the_full_python_jobs_only():
+    # Arrange
+    files = ["acp_adapter/commands.py", "hermes_cli/config.py"]
+
+    # Act
+    jobs = _selected_ci_jobs(files)
+
+    # Assert
+    assert _FULL_PYTHON_JOBS | {"lint"} <= jobs
+    assert "tests-acp" not in jobs
+    assert classify(files)["nix"]
+
+
+@pytest.mark.parametrize("event_name", ["push", "workflow_dispatch", "workflow_call"])
+def test_non_pr_events_run_every_python_job(event_name):
+    # Act
+    jobs = _selected_ci_jobs(["acp_adapter/commands.py"], event_name=event_name)
+
+    # Assert
+    assert _FULL_PYTHON_JOBS | {"tests-acp", "lint"} <= jobs
+
+
+def test_every_scoped_test_job_runs_a_known_scope_on_its_own_lane():
+    # Arrange
+    ci = _yaml(".github/workflows/ci.yaml")
+
+    # Act
+    scoped = {
+        name: job for name, job in ci["jobs"].items()
+        if job.get("uses") == "./.github/workflows/tests-scoped.yml"
+    }
+
+    # Assert
+    assert set(_mod._PY_SCOPES) == {job["with"]["scope"] for job in scoped.values()}
+    for job in scoped.values():
+        assert job["if"] == f"needs.detect.outputs.python_{job['with']['scope']} == 'true'"
+
+
+def test_the_aggregate_gate_needs_every_other_ci_job():
+    """A job missing from all-checks-pass.needs can fail without blocking a merge."""
+    # Arrange
+    ci = _yaml(".github/workflows/ci.yaml")
+    reporting = {"all-checks-pass", "ci-timings"}
+
+    # Act
+    gated = set(ci["jobs"]["all-checks-pass"]["needs"])
+
+    # Assert
+    assert set(ci["jobs"]) - reporting == gated
