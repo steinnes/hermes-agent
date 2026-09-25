@@ -350,6 +350,11 @@ def test_ci_jobs_only_gate_on_detect_outputs_that_detect_actually_declares():
     assert referenced - declared == set(), "job(s) gate on an output detect never declares"
 
 
+def test_ci_detector_has_checkout_headroom():
+    ci = _yaml(".github/workflows/ci.yaml")
+    assert ci["jobs"]["detect"]["timeout-minutes"] >= 5
+
+
 def _iter_if_expressions(job: object):
     """Yield every ``if:`` string in a job, including inside its steps."""
     if not isinstance(job, dict):

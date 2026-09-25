@@ -70,7 +70,7 @@ jobs:
     # Release runs force the lane: a stable candidate must build the flake
     # no matter what its diff touches.
     if: needs.detect.outputs.nix == 'true' || inputs.release == true
-    # The upstream repository uses a custom 32-core runner that is unavailable
+    # The upstream repository uses a larger private runner that is unavailable
     # to this fork. Use GitHub's standard hosted runner so fork CI can start.
     runs-on: ubuntu-latest
     timeout-minutes: 60

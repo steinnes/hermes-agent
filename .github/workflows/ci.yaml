@@ -31,7 +31,7 @@ on:
         default: false
   pull_request:
   push:
-    branches: [main]
+    branches: [main, steinn/main]
 
 permissions:
   contents: read
@@ -62,7 +62,7 @@ jobs:
   detect:
     name: Detect affected areas
     runs-on: ubuntu-latest
-    timeout-minutes: 1
+    timeout-minutes: 5
     outputs:
       python: ${{ steps.gate-lanes.outputs.python }}
       python_prod: ${{ steps.gate-lanes.outputs.python_prod }}
@@ -285,7 +285,8 @@ jobs:
   #   `success`. A skipped required lane fails the gate; only the PR-only
   #   jobs (history-check, lockfile-diff, supply-chain, review-labels) and
   #   the deferred Desktop E2E (e2e-desktop) may skip. The OSV scan's
-  #   findings are advisory, but its execution is required.
+  #   findings are advisory, but its execution is required. Failed and
+  #   cancelled jobs fail in both modes.
   #
   # Branch protection should require ONLY this check.
   #
