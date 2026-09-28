@@ -33,14 +33,13 @@ name: Install & Update E2E
 # after it ships, and would pin an "oldest" that nobody still runs.
 #
 # Triggers:
-#   * every 12 hours, so upstream drift (a new uv, a Node bump, a PyPI change)
-#     surfaces on a schedule rather than in someone's review cycle;
 #   * manually, where you can pick the route (a preset or specific legs) and how many
-#     releases to sample.
+#     releases to sample;
+#   * from the stable-release orchestrator via workflow_call.
 #
 # Deliberately NOT on pull_request: a leg takes ~11 minutes of real toolchain
 # installation, and the matrix multiplies that. Updating is release-shaped work,
-# so it is gated on releases and the clock instead.
+# so it is gated on releases and explicit dispatch instead.
 
 on:
   workflow_dispatch:
@@ -113,16 +112,12 @@ on:
         required: false
         type: string
         default: ''
-  schedule:
-    # Every 12 hours, off the hour to avoid the top-of-hour runner crunch.
-    - cron: '20 7,19 * * *'
-
 permissions:
   contents: read
 
 # A workflow_call run (stable release) is never cancelled: its group uses
 # github.run_id so a parent rerun cannot kill this child mid-flight. The
-# scheduled/manual runs keep ref-scoped collapse.
+# manual runs keep ref-scoped collapse.
 concurrency:
   group: install-e2e-${{ inputs.release == true && github.run_id || github.ref }}
   cancel-in-progress: ${{ inputs.release != true }}
@@ -211,7 +206,7 @@ jobs:
       - id: gen
         env:
           # Free text on dispatch, so it reaches the script as data, never as script.
-          # Scheduled runs have no inputs: the default route.
+          # A caller may omit the route; default to all source legs.
           ROUTE: ${{ inputs.route || 'all' }}
         run: |
           set -euo pipefail
