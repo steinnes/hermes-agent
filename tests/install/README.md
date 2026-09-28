@@ -160,8 +160,9 @@ The result chart on the run summary shows each leg as passed, failed, or skipped
 
 ## Triggers and cost
 
-The matrix does not run on pull requests. One leg installs real toolchains and takes more than 10 minutes. The triggers are:
+The full matrix does not run on pull requests. One leg installs real toolchains and takes more than 10 minutes. The triggers are:
 
+- A pull request that touches the install/update surface (the `paths:` list in `install-e2e.yml`). It runs only the `pr` route: `installer-script -> hermes-update` on Linux (newest release -> PR, and PR -> NEXT), Windows (PR -> NEXT) and macOS (newest release -> PR). The four legs run in parallel, so the wall clock is about one leg.
 - A reusable workflow call from the stable release gate.
 - Manual dispatch. You can select the route and the tag count:
 
