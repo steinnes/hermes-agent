@@ -33,17 +33,15 @@ name: Install & Update E2E
 # after it ships, and would pin an "oldest" that nobody still runs.
 #
 # Triggers:
-#   * every 12 hours, so upstream drift (a new uv, a Node bump, a PyPI change)
-#     surfaces on a schedule rather than in someone's review cycle;
 #   * manually, where you can pick the route (a preset or specific legs) and how many
 #     releases to sample;
+#   * from the stable-release orchestrator via workflow_call;
 #   * pull_request, path-filtered to the install/update surface, runs ONLY the
 #     `pr` route (generate-e2e-matrix.mjs PR_SUBSET): installer-script ->
 #     hermes-update on linux (newest release -> PR, and PR -> NEXT), windows
 #     (PR -> NEXT) and macos (newest release -> PR), sampling just the newest tag.
 #     Four legs in parallel keep a PR's wall clock near one leg (~15 min);
-#     the full matrix multiplies that, so it stays on the clock and releases.
-#     A red scheduled run is reported by install-e2e-red.yml.
+#     the full matrix multiplies that, so it stays on explicit dispatch and releases.
 
 on:
   workflow_dispatch:
@@ -116,10 +114,8 @@ on:
         required: false
         type: string
         default: ''
-  schedule:
-    # Every 12 hours, off the hour to avoid the top-of-hour runner crunch.
-    - cron: '20 7,19 * * *'
   pull_request:
+    branches: [steinn/main]
     # The install/update surface: derived from 60 days of commits whose subject
     # names update/install/pm/bootstrap/relaunch. Keep it to code a real
     # install or `hermes update` executes; hermes_cli/main.py and friends are
@@ -160,7 +156,7 @@ permissions:
 
 # A workflow_call run (stable release) is never cancelled: its group uses
 # github.run_id so a parent rerun cannot kill this child mid-flight. The
-# scheduled/manual runs keep ref-scoped collapse.
+# manual and PR runs keep ref-scoped collapse.
 concurrency:
   group: install-e2e-${{ inputs.release == true && github.run_id || github.ref }}
   cancel-in-progress: ${{ inputs.release != true }}
@@ -249,7 +245,7 @@ jobs:
       - id: gen
         env:
           # Free text on dispatch, so it reaches the script as data, never as script.
-          # Scheduled runs have no inputs: the default route. PRs run the pr subset.
+          # PRs run the pr subset; callers without a route use all source legs.
           ROUTE: ${{ github.event_name == 'pull_request' && 'pr' || inputs.route || 'all' }}
         run: |
           set -euo pipefail

@@ -163,8 +163,6 @@ The result chart on the run summary shows each leg as passed, failed, or skipped
 The full matrix does not run on pull requests. One leg installs real toolchains and takes more than 10 minutes. The triggers are:
 
 - A pull request that touches the install/update surface (the `paths:` list in `install-e2e.yml`). It runs only the `pr` route: `installer-script -> hermes-update` on Linux (newest release -> PR, and PR -> NEXT), Windows (PR -> NEXT) and macOS (newest release -> PR). The four legs run in parallel, so the wall clock is about one leg.
-- A schedule, every 12 hours. This finds upstream drift. When a scheduled run goes red, `install-e2e-red.yml` opens one issue labelled `install-e2e-red`, rewrites its body in place on every later red run, and closes it on the first green one.
-- A matching release tag push.
 - A reusable workflow call from the stable release gate.
 - Manual dispatch. You can select the route and the tag count:
 
@@ -173,7 +171,7 @@ gh workflow run install-e2e.yml --ref <branch> -f route=all -f tag-count=2
 ```
 
 The generator's output is the leg-count authority. Read the workflow's plan
-chart before dispatching a large run. Scheduled/tag runs default to two sampled
+chart before dispatching a large run. Stable-release calls default to two sampled
 tags; manual dispatch defaults to three. `tag-count` accepts 1–10.
 
 `all` selects every source OS. `both`, `update`, and `installer` select Linux

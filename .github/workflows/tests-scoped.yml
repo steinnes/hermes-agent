@@ -1,0 +1,60 @@
+name: Scoped tests
+
+# The focused pytest lane for a PR whose Python-relevant files all sit in one
+# scoped surface (_PY_SCOPES in scripts/ci/classify_changes.py). It runs the
+# scope's own tests/<package>/ tree and every other unit test file that names
+# the package. scripts/run_tests.sh fails when the list is empty or when no
+# test is collected, so this lane cannot pass without running tests.
+
+on:
+  workflow_call:
+    inputs:
+      scope:
+        description: A key of _PY_SCOPES in scripts/ci/classify_changes.py.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-scoped-${{ inputs.scope }}-${{ github.ref_type == 'tag' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  test:
+    name: Run ${{ inputs.scope }} tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up locked Python and test dependencies
+        uses: ./.github/actions/setup-pm
+        with:
+          packages: ripgrep
+          extras: '["all", "anthropic", "bedrock", "mistral", "fal", "modal", "daytona", "parallel-web"]'
+          test-environment: 'true'
+          prune-python-cache: true
+
+      - name: Check SQLite runs WAL
+        run: |
+          "$HERMES_PYTHON" -c "import sqlite3, sys, hermes_state_wal as w; v = w.is_sqlite_wal_reset_vulnerable(); print(f'Python {sys.version.split()[0]}, SQLite {sqlite3.sqlite_version}, WAL-reset vulnerable: {v}'); sys.exit(1 if v else 0)"
+
+      - name: Select ${{ inputs.scope }} test files
+        env:
+          SCOPE: ${{ inputs.scope }}
+        run: |
+          python3 scripts/ci/classify_changes.py --scope-tests "$SCOPE" > "$RUNNER_TEMP/scoped-tests.txt"
+          cat "$RUNNER_TEMP/scoped-tests.txt"
+
+      - name: Run ${{ inputs.scope }} tests
+        run: |
+          scripts/run_tests.sh --files-from "$RUNNER_TEMP/scoped-tests.txt"
+        env:
+          HERMES_TEST_WORKERS: 4
+          HERMES_TEST_FILE_TIMEOUT: "900"
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+          NOUS_API_KEY: ""

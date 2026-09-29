@@ -8,11 +8,16 @@ booleans (one per lane) to ``$GITHUB_OUTPUT`` and stdout. The
 
 Lanes:
 
-* ``python``      — pytest / ruff / ty / footguns.
-* ``python_prod`` — Python changes OUTSIDE tests/ — gates jobs that ship or
-  run the product (Desktop E2E backend, Docker image) but never import the
-  test suite. A tests-only PR keeps ``python`` (pytest must run) while
-  skipping those product jobs.
+* ``python``      — ruff / ty / footguns.
+* ``python_full`` — the full pytest suite: every Linux slice, e2e, e2e-upgrade
+  and the OS lanes. On for every Python diff except a scoped one.
+* ``python_<scope>`` — the focused pytest lane of one scoped surface (see
+  ``_PY_SCOPES``). On only when every Python-relevant file sits inside that
+  scope; it then replaces ``python_full``.
+* ``python_prod`` — Python changes OUTSIDE tests/ and outside a scope — gates
+  jobs that ship or run the whole product (Desktop E2E backend, Docker image,
+  Nix) but never import the test suite. A tests-only PR keeps ``python``
+  (pytest must run) while skipping those product jobs.
 * ``docker_meta`` — Dockerfiles etc.
 * ``docker`` — any product change + docker meta
 * ``nix``         — ``nix flake check``: the flake inputs and any product change.
@@ -46,6 +51,8 @@ must never skip one a change could break:
 * An empty diff, or any ``.github/`` change, runs everything.
 * ``python`` is a denylist: skipped only when *every* file is provably prose
   or a frontend-only package; an unrecognized path keeps it on.
+* A scoped lane is an allowlist: one Python-relevant file outside the scope,
+  or a file list that may be truncated, selects ``python_full`` instead.
 * ``skills/`` (incl. ``SKILL.md``) is python-relevant — the skill-doc tests
   read that tree, so a doc-looking edit can still break Python.
 * ``nix/``, ``flake.nix`` and ``flake.lock`` are the exception the other way:
@@ -62,10 +69,13 @@ must never skip one a change could break:
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import re
 import subprocess
 import sys
+from pathlib import Path
 
 _FRONTEND = ("ui-tui/", "web/", "apps/")  # TS typecheck-matrix packages
 # Shipped page outside those packages, exercised by the desktop Electron suite.
@@ -150,6 +160,18 @@ _DESKTOP_UPDATER_FILES = {
 _RUST_PATHS = ("apps/bootstrap-installer/src-tauri/",)
 _RUST_FILENAMES = {"Cargo.toml", "Cargo.lock"}
 
+# Scoped Python surfaces: scope -> package. A scope owns ``<package>/`` and its
+# mirrored ``tests/<package>/``. Callers, shared fixtures, conftest.py and the
+# runner are outside every scope, so a change to them runs the full suite.
+_PY_SCOPES = {"acp": "acp_adapter"}
+# The compare API returns at most 300 files. A list that long may be
+# truncated, so it cannot prove that a diff stays inside one scope.
+_COMPARE_FILE_CAP = 300
+# scripts/run_tests_parallel.py::_SKIP_PARTS: suites with their own jobs.
+_RUNNER_SKIP_DIRS = {"integration", "e2e", "docker"}
+_REPO = Path(__file__).resolve().parents[2]
+
+
 def _is_docs(p: str) -> bool:
     if p.startswith(("skills/", "optional-skills/")):
         return False
@@ -216,6 +238,32 @@ def _is_ci_review(p: str) -> bool:
     return os.path.basename(p).startswith("eslint.config.")
 
 
+def _py_scope(files: list[str]) -> str | None:
+    """The one scope that owns every Python-relevant file, else None."""
+    relevant = [f for f in files if not _py_irrelevant(f)]
+    if not relevant or len(files) >= _COMPARE_FILE_CAP:
+        return None
+    for scope, package in _PY_SCOPES.items():
+        if all(f.startswith((f"{package}/", f"tests/{package}/")) for f in relevant):
+            return scope
+    return None
+
+
+def scoped_test_files(scope: str, root: Path = _REPO) -> list[str]:
+    """Unit test files for a scope: ``tests/<package>/`` plus every other unit
+    test file that names the package (importers and patch targets)."""
+    package = _PY_SCOPES[scope]
+    owned = root / "tests" / package
+    names_package = re.compile(rf"\b{package}\b")
+    selected = []
+    for path in sorted((root / "tests").rglob("test_*.py")):
+        if _RUNNER_SKIP_DIRS & set(path.relative_to(root).parts[:-1]):
+            continue
+        if owned in path.parents or names_package.search(path.read_text(encoding="utf-8-sig")):
+            selected.append(path.relative_to(root).as_posix())
+    return selected
+
+
 def ci_review_files(files: list[str]) -> list[str]:
     """Return the CI-sensitive paths that need maintainer review."""
     return sorted({f.strip() for f in files if f.strip() and _is_ci_review(f.strip())})
@@ -225,7 +273,10 @@ def classify(files: list[str]) -> dict[str, bool]:
     """Map changed paths to ``{lane: should_run}``."""
     files = [f.strip() for f in files if f.strip()]
     python = any(not _py_irrelevant(f) for f in files)
-    python_prod = any(not _py_irrelevant(f) and not _py_test_only(f) for f in files)
+    scope = _py_scope(files)
+    python_prod = scope is None and any(
+        not _py_irrelevant(f) and not _py_test_only(f) for f in files
+    )
     frontend = any(
         f.startswith(_FRONTEND) or f in _ROOT_NPM or f in _FRONTEND_FILES
         or f.startswith("tests-js/")
@@ -238,6 +289,8 @@ def classify(files: list[str]) -> dict[str, bool]:
     
     ret = {
         "python": python,
+        "python_full": python and scope is None,
+        **{f"python_{name}": name == scope for name in _PY_SCOPES},
         "python_prod": python_prod,
         "docker": docker_meta or python_prod or frontend,
         "docker_meta": docker_meta,
@@ -258,6 +311,8 @@ def classify(files: list[str]) -> dict[str, bool]:
     }
     if not files or any(f.startswith(".github/") for f in files):
         ret["python"] = True
+        ret["python_full"] = True
+        ret.update({f"python_{name}": True for name in _PY_SCOPES})
         ret["python_prod"] = True
         ret["docker"] = True
         ret["docker_meta"] = True
@@ -332,7 +387,23 @@ def pull_request_changed_files() -> list[str]:
     return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
 
 
-def main() -> int:
+def _print_scoped_tests(argv: list[str]) -> int:
+    """``--scope-tests SCOPE [--root DIR]``: print the scope's test files."""
+    parser = argparse.ArgumentParser(prog="classify_changes.py --scope-tests")
+    parser.add_argument("scope", choices=sorted(_PY_SCOPES))
+    parser.add_argument("--root", type=Path, default=_REPO)
+    args = parser.parse_args(argv)
+    files = scoped_test_files(args.scope, args.root)
+    if not files:
+        print(f"error: scope {args.scope!r} selects no test files", file=sys.stderr)
+        return 1
+    print("\n".join(files))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    if argv and argv[0] == "--scope-tests":
+        return _print_scoped_tests(argv[1:])
     files = sys.stdin.read().splitlines()
     if not any(f.strip() for f in files):
         recovered = pull_request_changed_files()
@@ -356,4 +427,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))
