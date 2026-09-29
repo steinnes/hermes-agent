@@ -115,6 +115,7 @@ on:
         type: string
         default: ''
   pull_request:
+    branches: [steinn/main]
     # The install/update surface: derived from 60 days of commits whose subject
     # names update/install/pm/bootstrap/relaunch. Keep it to code a real
     # install or `hermes update` executes; hermes_cli/main.py and friends are

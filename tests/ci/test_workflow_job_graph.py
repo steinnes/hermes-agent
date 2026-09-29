@@ -71,3 +71,21 @@ def test_no_workflow_runs_from_a_tag_push():
         elif {"tags", "tags-ignore"} & set(push):
             violations.append(filename)
     assert not violations, "tag-triggered workflows: " + ", ".join(violations)
+
+
+def test_fork_comparison_pr_does_not_start_expensive_workflows():
+    workflows = _loaded()
+    for filename in (
+        "ci.yaml",
+        "docker.yml",
+        "nix.yml",
+        "install-e2e.yml",
+        "pm-bundle.yml",
+        "windows-bundle-sdk.yml",
+    ):
+        assert workflows[filename]["on"]["pull_request"]["branches"] == ["steinn/main"]
+
+    ci = workflows["ci.yaml"]["on"]
+    assert ci["push"]["branches"] == ["main"]
+    assert "workflow_dispatch" in ci and "workflow_call" in ci
+    assert "schedule" not in workflows["install-e2e.yml"]["on"]

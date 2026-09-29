@@ -32,6 +32,7 @@ on:
         type: string
         default: ''
   pull_request:
+    branches: [steinn/main]
     paths:
       - 'pm/**'
       - 'scripts/bundles/**'

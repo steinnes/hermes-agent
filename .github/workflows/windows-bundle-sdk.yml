@@ -4,6 +4,7 @@ name: Windows bundle SDK
 # runIf(win32) leg, so this is the only lane that runs the real downloader.
 on:
   pull_request:
+    branches: [steinn/main]
     paths:
       - 'apps/desktop/scripts/windows-bundle-tools.mjs'
       - 'apps/desktop/scripts/windows-bundle-tools.test.mjs'
